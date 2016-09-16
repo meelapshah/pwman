@@ -5,7 +5,7 @@ import pprint
 import sqlite3
 import sys
 
-from sqlalchemy import Column, Integer, String, create_engine, inspect
+from sqlalchemy import Column, Integer, String, create_engine, inspect, or_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -22,7 +22,10 @@ class Secret(Base):
   password = Column(String)
   notes = Column(String)
 
-SecretColumns = inspect(Secret).columns.keys()
+  @classmethod
+  def todict(cls, secret):
+    cols = inspect(cls).columns.keys()
+    return {col: getattr(secret, col, '') for col in cols}
 
 class SecretManager(object):
   def __init__(self, dbfile):
@@ -60,10 +63,20 @@ class SecretManager(object):
   def listall(self):
     return self._sess.query(Secret).all()
 
+  def query(self, q):
+    return self._sess.query(Secret).filter(
+      or_(
+        Secret.name.ilike('%{q}%'.format(q=q)),
+        Secret.website.ilike('%{q}%'.format(q=q))
+      )
+    ).all()
+
+
 
 def upsert(args):
   upsert_kwargs = {}
-  for col in SecretColumns:
+  cols = inspect(Secret).columns.keys()
+  for col in cols:
     colval = getattr(args, col, None)
     if colval:
       upsert_kwargs[col] = colval
@@ -72,13 +85,17 @@ def upsert(args):
     sm.upsert(**upsert_kwargs)
 
 def query(args):
-  pass
+  sm = SecretManager(args.dbfile)
+  with sm, sm.reading():
+    secrets = sm.query(args.query)  
+  secrets = list(map(Secret.todict, secrets))
+  pprint.pprint(secrets)
 
 def listall(args):
   sm = SecretManager(args.dbfile)
   with sm, sm.reading():
     secrets = sm.listall()
-  secrets = [{col: getattr(s, col, '') for col in SecretColumns} for s in secrets]
+  secrets = map(Secret.todict, secrets)
   pprint.pprint(secrets)
 
 def main(argv):
@@ -88,6 +105,7 @@ def main(argv):
   subparsers = parser.add_subparsers()
 
   upsert_parser = subparsers.add_parser('upsert')
+  upsert_parser.add_argument('-i', '--id')
   upsert_parser.add_argument('-n', '--name')
   upsert_parser.add_argument('-w', '--website')
   upsert_parser.add_argument('-u', '--user')
