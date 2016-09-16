@@ -1,11 +1,13 @@
 import argparse
 from contextlib import contextmanager
 import os.path
-from sqlalchemy import Column, String, create_engine, inspect
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+import pprint
 import sqlite3
 import sys
+
+from sqlalchemy import Column, Integer, String, create_engine, inspect
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
 
 Session = sessionmaker()
@@ -13,12 +15,14 @@ Base = declarative_base()
 
 class Secret(Base):
   __tablename__ = 'pw'
-  name = Column(String, primary_key=True)
+  id = Column(Integer, primary_key=True, autoincrement=True)
+  name = Column(String)
   website = Column(String)
   user = Column(String)
   password = Column(String)
   notes = Column(String)
 
+SecretColumns = inspect(Secret).columns.keys()
 
 class SecretManager(object):
   def __init__(self, dbfile):
@@ -42,14 +46,24 @@ class SecretManager(object):
     except:
       self._sess.rollback()
 
+  @contextmanager
+  def reading(self):
+    try:
+      yield self._sess
+      self._sess.expunge_all()
+    except:
+      self._sess.rollback()
+
   def upsert(self, **kwargs):
     self._sess.add(Secret(**kwargs))
+
+  def listall(self):
+    return self._sess.query(Secret).all()
 
 
 def upsert(args):
   upsert_kwargs = {}
-  columns = inspect(Secret).columns.keys()
-  for col in columns:
+  for col in SecretColumns:
     colval = getattr(args, col, None)
     if colval:
       upsert_kwargs[col] = colval
@@ -61,7 +75,11 @@ def query(args):
   pass
 
 def listall(args):
-  pass
+  sm = SecretManager(args.dbfile)
+  with sm, sm.reading():
+    secrets = sm.listall()
+  secrets = [{col: getattr(s, col, '') for col in SecretColumns} for s in secrets]
+  pprint.pprint(secrets)
 
 def main(argv):
   parser = argparse.ArgumentParser('Password Manager')
@@ -82,7 +100,7 @@ def main(argv):
   query_parser.set_defaults(func=query)
 
   list_parser = subparsers.add_parser('list')
-  list_parser.set_defaults(func=list)
+  list_parser.set_defaults(func=listall)
 
   cfg = parser.parse_args(argv)
   cfg.func(cfg)
