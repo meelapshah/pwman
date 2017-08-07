@@ -1,13 +1,16 @@
+#!/usr/bin/env python3
+
 import argparse
 from contextlib import contextmanager
 import os.path
-import pprint
 import sqlite3
 import sys
+from textwrap import wrap
 
 from sqlalchemy import Column, Integer, String, create_engine, inspect, or_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from terminaltables import SingleTable
 
 
 Session = sessionmaker()
@@ -46,7 +49,8 @@ class SecretManager(object):
     try:
       yield self._sess
       self._sess.commit()
-    except:
+    except e:
+      print(e)
       self._sess.rollback()
 
   @contextmanager
@@ -54,11 +58,19 @@ class SecretManager(object):
     try:
       yield self._sess
       self._sess.expunge_all()
-    except:
+    except e:
+      print(e)
       self._sess.rollback()
 
   def upsert(self, **kwargs):
-    self._sess.add(Secret(**kwargs))
+    secret_id = kwargs.pop('id', None)
+    if secret_id:
+      s = self._sess.query(Secret).get(secret_id)
+      for k, v in kwargs.items():
+        setattr(s, k, v)
+      self._sess.merge(s)
+    else:
+      self._sess.add(Secret(**kwargs))
 
   def listall(self):
     return self._sess.query(Secret).all()
@@ -71,7 +83,13 @@ class SecretManager(object):
       )
     ).all()
 
-
+def print_secrets(secrets):
+  data = [ ["id", "name", "website", "user", "password", "notes" ] ]
+  for s in secrets:
+    data = Secret.todict(s).items()
+    table = SingleTable(data)
+    table.inner_heading_row_border = False
+    print(table.table)
 
 def upsert(args):
   upsert_kwargs = {}
@@ -88,39 +106,40 @@ def query(args):
   sm = SecretManager(args.dbfile)
   with sm, sm.reading():
     secrets = sm.query(args.query)  
-  secrets = list(map(Secret.todict, secrets))
-  pprint.pprint(secrets)
+  print_secrets(secrets)
 
 def listall(args):
   sm = SecretManager(args.dbfile)
   with sm, sm.reading():
     secrets = sm.listall()
-  secrets = map(Secret.todict, secrets)
-  pprint.pprint(secrets)
+  print_secrets(secrets)
 
-def main(argv):
+def main(argv=sys.argv[1:]):
   parser = argparse.ArgumentParser('Password Manager')
-  parser.add_argument('dbfile')
+  parser.add_argument('-d', '--dbfile', default=os.path.expanduser('~/encrypted/pw.sqlite'))
 
   subparsers = parser.add_subparsers()
 
-  upsert_parser = subparsers.add_parser('upsert')
+  upsert_parser = subparsers.add_parser('upsert', aliases=['u'])
   upsert_parser.add_argument('-i', '--id')
   upsert_parser.add_argument('-n', '--name')
   upsert_parser.add_argument('-w', '--website')
   upsert_parser.add_argument('-u', '--user')
   upsert_parser.add_argument('-p', '--password')
-  upsert_parser.add_argument('-t', '--note')
+  upsert_parser.add_argument('-t', '--notes')
   upsert_parser.set_defaults(func=upsert)
 
-  query_parser = subparsers.add_parser('query')
+  query_parser = subparsers.add_parser('query', aliases=['q'])
   query_parser.add_argument('query')
   query_parser.set_defaults(func=query)
 
-  list_parser = subparsers.add_parser('list')
+  list_parser = subparsers.add_parser('list', aliases=['l'])
   list_parser.set_defaults(func=listall)
 
   cfg = parser.parse_args(argv)
+  if not os.path.exists(cfg.dbfile):
+    print('db file does not exist')
+    sys.exit(-1)
   cfg.func(cfg)
 
 if __name__ == '__main__':
